@@ -16,7 +16,9 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.widget.RemoteViews
+import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.util.Locale
 
@@ -146,8 +148,6 @@ object MainWidget {
 /**
  * يرسم الويدجت كله كصورة واحدة فوق الصورة الفارغة.
  * كل الإحداثيات بمقياس الصورة الأصلية 1220 × 2010.
- * الملفات المطلوبة في assets: widget_blank.jpg و font.otf و p0.png إلى p5.png
- * رموز الطقس: إيموجي النظام (تُستبدل لاحقًا بأيقونات مصنّعة).
  */
 object WidgetRenderer {
     private const val W = 1220f
@@ -163,6 +163,54 @@ object WidgetRenderer {
     private var font: Typeface? = null
     private val icons = HashMap<String, Bitmap?>()
     private val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    // بدائل الأيقونات إذا لم تُرفع
+    private val FALLBACK = mapOf(
+        "clear_night" to listOf("clear_day"),
+        "mostly_day" to listOf("partly_day", "clear_day"),
+        "mostly_night" to listOf("mostly_day", "partly_night", "partly_day"),
+        "partly_night" to listOf("partly_day", "cloudy"),
+        "partly_day" to listOf("cloudy"),
+        "fog" to listOf("cloudy"),
+        "drizzle" to listOf("rain_light", "rain"),
+        "freezing_rain" to listOf("rain"),
+        "rain_light" to listOf("rain"),
+        "rain_heavy" to listOf("rain"),
+        "snow_light" to listOf("snow"),
+        "snow_heavy" to listOf("snow"),
+        "thunder_hail" to listOf("thunder", "rain_heavy"),
+        "thunder" to listOf("rain_heavy", "rain")
+    )
+
+    private val EMOJI = mapOf(
+        "clear_day" to "☀️", "clear_night" to "🌙",
+        "mostly_day" to "🌤️", "mostly_night" to "🌙",
+        "partly_day" to "⛅", "partly_night" to "☁️",
+        "cloudy" to "☁️", "fog" to "🌫️",
+        "drizzle" to "🌦️", "freezing_rain" to "🌧️",
+        "rain_light" to "🌦️", "rain" to "🌧️", "rain_heavy" to "🌧️",
+        "snow_light" to "❄️", "snow" to "❄️", "snow_heavy" to "❄️",
+        "thunder" to "⛈️", "thunder_hail" to "⛈️"
+    )
+
+    private fun iconKey(code: Int, day: Boolean): String = when (code) {
+        0 -> if (day) "clear_day" else "clear_night"
+        1 -> if (day) "mostly_day" else "mostly_night"
+        2 -> if (day) "partly_day" else "partly_night"
+        3 -> "cloudy"
+        45, 48 -> "fog"
+        51, 53, 55 -> "drizzle"
+        56, 57, 66, 67 -> "freezing_rain"
+        61, 80 -> "rain_light"
+        63, 81 -> "rain"
+        65, 82 -> "rain_heavy"
+        71, 85 -> "snow_light"
+        73, 77 -> "snow"
+        75, 86 -> "snow_heavy"
+        95 -> "thunder"
+        96, 99 -> "thunder_hail"
+        else -> "cloudy"
+    }
 
     private fun typeface(ctx: Context): Typeface {
         font?.let { return it }
@@ -237,14 +285,26 @@ object WidgetRenderer {
         c.drawBitmap(b, null, dst, bmpPaint)
     }
 
-    /** رمز الطقس: إيموجي النظام التلقائي (خط النظام الافتراضي لا خط الويدجت) */
-    private fun drawEmoji(c: Canvas, emoji: String, box: RectF) {
+    private fun drawWeather(ctx: Context, c: Canvas, key: String, box: RectF) {
+        val chain = ArrayList<String>()
+        chain.add(key)
+        chain.addAll(FALLBACK[key] ?: emptyList())
+        for (k in chain) {
+            val b = icon(ctx, "w_$k.png", (box.width() * S).toInt())
+            if (b != null) {
+                drawBmp(c, b, box)
+                return
+            }
+        }
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER
-            textSize = box.height() * 0.78f
+            textSize = box.height() * 0.75f
         }
         val fm = p.fontMetrics
-        c.drawText(emoji, box.centerX(), box.centerY() - (fm.ascent + fm.descent) / 2f, p)
+        c.drawText(
+            EMOJI[key] ?: "☁️", box.centerX(),
+            box.centerY() - (fm.ascent + fm.descent) / 2f, p
+        )
     }
 
     private fun toArabic(s: String): String {
@@ -256,6 +316,21 @@ object WidgetRenderer {
     private fun dashYear(s: String): String {
         val i = s.lastIndexOf(' ')
         return if (i > 0) s.substring(0, i) + " - " + s.substring(i + 1) else s
+    }
+
+    private fun isDay(store: Store, date: LocalDate, hour: Int): Boolean {
+        val line = store.prayerData.lines().firstOrNull { it.startsWith("$date=") }
+        if (line != null) {
+            try {
+                val t = line.substringAfter("=").split(",")
+                val sunrise = LocalTime.parse(t[1])
+                val maghrib = LocalTime.parse(t[4])
+                val x = LocalTime.of(hour, 0)
+                return !x.isBefore(sunrise) && x.isBefore(maghrib)
+            } catch (e: Exception) {
+            }
+        }
+        return hour in 6..17
     }
 
     fun render(ctx: Context): Bitmap {
@@ -278,6 +353,134 @@ object WidgetRenderer {
         val back = background(ctx)
         if (back != null) c.drawBitmap(back, 0f, 0f, bmpPaint)
         else c.drawColor(Color.parseColor("#0B1B33"))
+        c.restore()
+
+        c.scale(S, S)
+
+        val local = LocalDateTime.now()
+        val date = local.toLocalDate()
+        val now = ZonedDateTime.now(PrayerManager.zone(store))
+        val today = now.toLocalDate()
+
+        // ===== الساعة =====
+        val cp = ClockManager.parts(local, settings.use24h)
+        fit(c, n("${cp.hour}:${cp.minute}"), RectF(172f, 150f, 308f, 240f), paint(GOLD, tf), 82f)
+        if (cp.period.isNotEmpty()) {
+            fit(c, cp.period, RectF(172f, 236f, 308f, 262f), paint(DIM, tf), 24f)
+        }
+
+        // ===== التاريخان =====
+        val hj = ClockManager.hijri(date, settings.hijriAdjust).removeSuffix(" هـ")
+        fit(c, n(dashYear(hj)), RectF(345f, 143f, 548f, 191f), paint(DIM, tf), 34f)
+        val gr = ClockManager.gregorian(date, settings.levantMonths)
+        fit(c, n(dashYear(gr)), RectF(345f, 206f, 548f, 252f), paint(DIM, tf), 34f)
+
+        // ===== اسم اليوم =====
+        fit(c, ClockManager.dayName(date), RectF(745f, 195f, 1150f, 380f), paint(GOLD, tf), 175f)
+
+        // ===== الصلاة =====
+        val r = if (store.hasLocation) PrayerManager.compute(store, now) else null
+        val cardX = arrayOf(
+            floatArrayOf(1012f, 1192f), floatArrayOf(820f, 1000f), floatArrayOf(628f, 810f),
+            floatArrayOf(432f, 615f), floatArrayOf(237f, 420f), floatArrayOf(33f, 222f)
+        )
+        val st = r?.state
+        if (st is PrayerManager.State.Now) {
+            fit(c, "صلاة ${st.prayer}", RectF(60f, 700f, 1160f, 1000f), paint(GOLD, tf), 190f)
+        } else if (r != null) {
+            for (i in 0..5) {
+                val x0 = cardX[i][0]
+                val x1 = cardX[i][1]
+                val cx = (x0 + x1) / 2f
+                val b = icon(ctx, "p$i.png", (104 * S).toInt())
+                if (b != null) drawBmp(c, b, RectF(cx - 52f, 689f, cx + 52f, 793f))
+                fit(
+                    c, PrayerManager.displayName(i, today),
+                    RectF(x0 + 6f, 800f, x1 - 6f, 858f), paint(CREAM, tf), 46f
+                )
+                val t = r.times[i]
+                val col = if (i == r.nextIndex) WHITE else GOLD
+                fit(
+                    c, n(String.format(Locale.US, "%02d", t.hour)),
+                    RectF(x0, 866f, x1, 948f), paint(col, tf), 92f
+                )
+                fit(
+                    c, n(String.format(Locale.US, "%02d", t.minute)),
+                    RectF(x0, 944f, x1, 1002f), paint(col, tf), 64f
+                )
+            }
+        }
+
+        // ===== شريط العد التنازلي =====
+        val barText = when {
+            !store.hasLocation -> "اختر مدينتك من التطبيق"
+            r == null -> "جارٍ جلب المواقيت..."
+            st is PrayerManager.State.Now -> "حان الآن موعد الصلاة"
+            st != null -> PrayerManager.text(st)
+            else -> ""
+        }
+        fit(c, n(barText), RectF(200f, 1086f, 1020f, 1174f), paint(CREAM, tf), 54f)
+
+        // ===== اسم المدينة =====
+        val place = if (store.hasLocation) store.place else "اختر المدينة"
+        fit(c, place, RectF(340f, 1200f, 985f, 1272f), paint(GOLD, tf), 56f)
+
+        // ===== توقعات ثلاثة أيام =====
+        val days = WeatherManager.days(store, today)
+        val wx = arrayOf(
+            floatArrayOf(820f, 1192f), floatArrayOf(425f, 803f), floatArrayOf(28f, 410f)
+        )
+        for (i in 0..2) {
+            val d = days.getOrNull(i) ?: continue
+            val x0 = wx[i][0]
+            val x1 = wx[i][1]
+            val w = x1 - x0
+            val name = when (d.date) {
+                today -> "اليوم"
+                today.plusDays(1) -> "غدًا"
+                else -> ClockManager.dayName(d.date)
+            }
+            val dateStr = ClockManager.gregorian(d.date, settings.levantMonths).substringBeforeLast(' ')
+            fit(
+                c, "$name ${n(dateStr)}",
+                RectF(x0 + 10f, 1322f, x1 - 10f, 1370f), paint(CREAM, tf), 38f
+            )
+            fit(
+                c, n("${d.max}°"),
+                RectF(x0 + w * 0.05f, 1378f, x0 + w * 0.52f, 1490f), paint(WHITE, tf), 130f
+            )
+            drawWeather(
+                ctx, c, iconKey(d.code, true),
+                RectF(x0 + w * 0.54f, 1374f, x0 + w * 0.94f, 1496f)
+            )
+        }
+
+        // ===== فترات اليوم (5 فترات كل 4 ساعات) =====
+        val slots = WeatherManager.slots(store, now.toLocalDateTime())
+        val sx = floatArrayOf(1085f, 862f, 610f, 360f, 133f)
+        for (i in 0..4) {
+            val s = slots.getOrNull(i) ?: continue
+            val x = sx[i]
+            val hour = s.label.takeLast(5).take(2).toIntOrNull() ?: 12
+            val slotDate = if (s.label.startsWith("غدًا")) today.plusDays(1) else today
+            fit(c, n(s.label), RectF(x - 105f, 1546f, x + 105f, 1590f), paint(DIM, tf), 34f)
+            fit(c, n("${s.temp}°"), RectF(x - 90f, 1638f, x + 90f, 1696f), paint(CREAM, tf), 44f)
+            drawWeather(
+                ctx, c, iconKey(s.code, isDay(store, slotDate, hour)),
+                RectF(x - 48f, 1700f, x + 48f, 1770f)
+            )
+        }
+
+        // ===== تنبيه البيانات القديمة =====
+        val oldW = days.isNotEmpty() &&
+            System.currentTimeMillis() - store.weatherFetched > 3L * 3600_000L
+        if (store.hasLocation && (oldW || r?.stale == true)) {
+            fit(c, "بعض البيانات قديمة، تحقق من الاتصال", RectF(260f, 1930f, 960f, 1990f), paint(DIM, tf), 32f)
+        }
+
+        return out
+    }
+}or.parseColor("#0B1B33"))
         c.restore()
 
         c.scale(S, S)
