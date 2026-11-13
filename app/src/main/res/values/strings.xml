@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">mezag</string>
+    <string name="welcome_title">مرحبًا بك في mezag</string>
+    <string name="welcome_subtitle">كل تفاصيل يومك في مكان واحد</string>
+    <string name="prayer_times">مواقيت الصلاة</string>
+    <string name="weather">الطقس</string>
+    <string name="settings">الإعدادات</string>
+    <string name="ramadan">العد التنازلي لرمضان</string>
+</resources>
