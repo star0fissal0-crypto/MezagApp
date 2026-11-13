@@ -2,92 +2,37 @@ package com.mezagapp.app
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.format.DateFormat
-import android.widget.Button
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
+import org.json.JSONObject
+import java.time.LocalDateTime
+import java.time.ZonedDateTime
 import java.util.Locale
+import kotlin.math.roundToInt
 
-class MainActivity : Activity() {
+private class FixedSlot(val time: LocalDateTime, val temp: Int, val code: Int)
 
-    private lateinit var clockText: TextView
-    private lateinit var dateText: TextView
-
-    private val handler = Handler(Looper.getMainLooper())
-
-    private val updateTask = object : Runnable {
-        override fun run() {
-            updateDateAndTime()
-            handler.postDelayed(this, 30_000)
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        setContentView(R.layout.activity_main)
-
-        clockText = findViewById(R.id.clockText)
-        dateText = findViewById(R.id.dateText)
-
-        findViewById<Button>(R.id.settingsButton)
-            .setOnClickListener {
-                startActivity(
-                    Intent(this, SettingsActivity::class.java)
-                )
-            }
-
-        updateDateAndTime()
-    }
-
-    override fun onResume() {
-        super.onResume()
-
-        if (::clockText.isInitialized) {
-            handler.removeCallbacks(updateTask)
-            handler.post(updateTask)
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        handler.removeCallbacks(updateTask)
-    }
-
-    private fun updateDateAndTime() {
-        val now = Date()
-
-        val preferences = getSharedPreferences(
-            "mezag_settings",
-            MODE_PRIVATE
-        )
-
-        val use24Hour = preferences.getBoolean(
-            "use_24_hour",
-            DateFormat.is24HourFormat(this)
-        )
-
-        val clockPattern = if (use24Hour) {
-            "HH:mm"
-        } else {
-            "hh:mm a"
-        }
-
-        val clockFormatter = SimpleDateFormat(
-            clockPattern,
-            Locale.getDefault()
-        )
-
-        val dateFormatter = SimpleDateFormat(
-            "EEEE، d MMMM yyyy",
-            Locale("ar")
-        )
-
-        clockText.text = clockFormatter.format(now)
-        dateText.text = dateFormatter.format(now)
-    }
-}
+/**
+ * فترات الطقس الثابتة: 04 و08 و12 و16 و20 و00.
+ * تُحذف الفترة بعد 30 دقيقة من وقتها ويُضاف التالي، فيبقى العدد 6 دائمًا.
+ */
+private fun fixedSlots(store: Store, now: LocalDateTime): List<FixedSlot> {
+    val out = ArrayList<FixedSlot>()
+    try {
+        val h = JSONObject(store.weatherJson).getJSONObject("hourly")
+        val time = h.getJSONArray("time")
+        val temp = h.getJSONArray("temperature_2m")
+        val code = h.getJSONArray("weather_code")
+        val index = HashMap<LocalDateTime, Int>()
+        for (i in 0 until time.length()) index[LocalDateTime.parse(time.getString(i))] = i
+        val cutoff = now.minusMinutes(30)
+        var t = now.toLocalDate().atStartOfDay()
