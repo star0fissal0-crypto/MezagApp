@@ -32,6 +32,14 @@ class SettingsActivity : Activity() {
         cornerRadius = dp(14).toFloat()
     }
 
+    /** يحوّل الأرقام حسب الخيار العام للتطبيق (عربية أو إنجليزية) */
+    private fun n(s: String): String {
+        if (!WidgetPrefs.arabicDigits(this)) return s
+        val sb = StringBuilder()
+        for (ch in s) sb.append(if (ch in '0'..'9') '٠' + (ch - '0') else ch)
+        return sb.toString()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = SettingsRepository(this)
@@ -50,7 +58,7 @@ class SettingsActivity : Activity() {
 
     private fun stamp(ms: Long): String =
         if (ms == 0L) "لم تُجلب بعد"
-        else "آخر تحديث: " + SimpleDateFormat("d/M HH:mm", Locale.US).format(Date(ms))
+        else "آخر تحديث: " + n(SimpleDateFormat("d/M HH:mm", Locale.US).format(Date(ms)))
 
     private fun render() {
         val t = ThemeManager.get(settings.themeIndex)
@@ -118,25 +126,28 @@ class SettingsActivity : Activity() {
 
         col.addView(label("الإعدادات", 30f, t.text))
 
-        col.addView(switchRow("نظام 24 ساعة", settings.use24h) { settings.use24h = it })
+        col.addView(switchRow(n("نظام 24 ساعة"), settings.use24h) { settings.use24h = it })
         col.addView(switchRow("أسماء الشهور المشرقية (كانون، شباط...)", settings.levantMonths) {
             settings.levantMonths = it
         })
         col.addView(switchRow(
-            "أرقام عربية (١٢٣) في الويدجت، وإلا إنجليزية (123)",
+            "الأرقام العربية (١٢٣) في التطبيق والويدجت، وإلا الإنجليزية (123)",
             WidgetPrefs.arabicDigits(this)
         ) {
             WidgetPrefs.setArabicDigits(this, it)
+            render()
         })
 
         col.addView(label("تعديل التاريخ الهجري", 18f, t.sub))
         val a = settings.hijriAdjust
         col.addView(stepper(
-            when {
-                a > 0 -> "+$a يوم"
-                a < 0 -> "$a يوم"
-                else -> "بلا تعديل"
-            },
+            n(
+                when {
+                    a > 0 -> "+$a يوم"
+                    a < 0 -> "$a يوم"
+                    else -> "بلا تعديل"
+                }
+            ),
             { settings.hijriAdjust = settings.hijriAdjust - 1; render() },
             { settings.hijriAdjust = settings.hijriAdjust + 1; render() }
         ))
@@ -177,11 +188,13 @@ class SettingsActivity : Activity() {
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val v = store.offset(i)
             line.addView(stepper(
-                when {
-                    v > 0 -> "+$v دقيقة"
-                    v < 0 -> "$v دقيقة"
-                    else -> "0"
-                },
+                n(
+                    when {
+                        v > 0 -> "+$v دقيقة"
+                        v < 0 -> "$v دقيقة"
+                        else -> "0"
+                    }
+                ),
                 { store.setOffset(i, store.offset(i) - 1); render() },
                 { store.setOffset(i, store.offset(i) + 1); render() }
             ))
