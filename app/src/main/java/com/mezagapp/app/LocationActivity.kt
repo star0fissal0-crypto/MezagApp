@@ -2,6 +2,7 @@ package com.mezagapp.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.location.Geocoder
@@ -12,6 +13,9 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -26,6 +30,7 @@ class LocationActivity : Activity() {
     private lateinit var th: Theme
     private lateinit var results: LinearLayout
     private lateinit var status: TextView
+    private lateinit var input: EditText
 
     private class Place(
         val title: String,
@@ -37,14 +42,16 @@ class LocationActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun box(color: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(14).toFloat()
+    }
+
     private fun btn(s: String, onClick: () -> Unit) = TextView(this).apply {
         text = s
         textSize = 18f
         setTextColor(th.accent)
-        background = GradientDrawable().apply {
-            setColor(th.card)
-            cornerRadius = dp(14).toFloat()
-        }
+        background = box(th.card)
         setPadding(dp(18), dp(14), dp(18), dp(14))
         setOnClickListener { onClick() }
         layoutParams = LinearLayout.LayoutParams(
@@ -52,16 +59,40 @@ class LocationActivity : Activity() {
         ).apply { bottomMargin = dp(8) }
     }
 
+    private fun hideKeyboard() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(input.windowToken, 0)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = Store(this)
-        th = ThemeManager.get(SettingsRepository(this).themeIndex)
+        // لا تُظهر لوحة المفاتيح تلقائيًا عند الفتح (سبب البطء)
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
 
+        store = Store(this)
+        th = ThemeManager.resolve(this, SettingsRepository(this), store)
+        ThemeManager.applySystemBars(this, th)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(th.bgTop)
+            fitsSystemWindows = true
+        }
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(dp(20), dp(28), dp(20), dp(40))
+            setPadding(dp(20), dp(20), dp(20), dp(12))
+            isFocusableInTouchMode = true
         }
+        root.addView(
+            col,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
 
         col.addView(TextView(this).apply {
             text = "اختيار الموقع"
@@ -70,14 +101,30 @@ class LocationActivity : Activity() {
             setPadding(0, 0, 0, dp(12))
         })
 
-        val input = EditText(this).apply {
+        input = EditText(this).apply {
             hint = "ابحث عن مدينة (عربي أو إنجليزي)"
             setTextColor(th.text)
             setHintTextColor(th.sub)
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            background = box(th.card)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                    search(text.toString().trim())
+                    true
+                } else {
+                    false
+                }
+            }
         }
-        col.addView(input)
+        col.addView(
+            input,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+        )
 
         col.addView(btn("🔍 بحث") { search(input.text.toString().trim()) })
         col.addView(btn("📍 استخدام موقعي الحالي") { useGps() })
@@ -85,20 +132,22 @@ class LocationActivity : Activity() {
         status = TextView(this).apply {
             textSize = 14f
             setTextColor(th.sub)
-            setPadding(0, dp(8), 0, dp(8))
+            setPadding(0, dp(4), 0, dp(8))
         }
         col.addView(status)
 
         results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(results)
+        col.addView(
+            ScrollView(this).apply { addView(results) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
 
-        setContentView(ScrollView(this).apply {
-            setBackgroundColor(th.bg)
-            addView(col)
-        })
+        setContentView(root)
+        col.requestFocus()
     }
 
     private fun search(q: String) {
+        hideKeyboard()
         if (q.length < 2) {
             status.text = "اكتب حرفين على الأقل"
             return
@@ -166,6 +215,7 @@ class LocationActivity : Activity() {
     }
 
     private fun useGps() {
+        hideKeyboard()
         if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {

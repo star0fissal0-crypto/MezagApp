@@ -1,10 +1,17 @@
 package com.mezagapp.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.text.format.DateFormat
+import android.view.View
+import android.view.WindowInsetsController
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZonedDateTime
 import java.time.chrono.HijrahDate
 import java.time.temporal.ChronoField
 import java.util.Locale
@@ -100,56 +107,175 @@ class SettingsRepository(private val ctx: Context) {
         get() = p.getInt("hijriAdjust", 0)
         set(v) { p.edit().putInt("hijriAdjust", v).apply() }
 
-    var themeIndex: Int
-        get() = p.getInt("themeIndex", 0)
-        set(v) { p.edit().putInt("themeIndex", v).apply() }
+    /** ThemeManager.AUTO (تلقائي حسب الصلاة) أو ThemeManager.SYSTEM (حسب الهاتف) أو 0..7 ثيم ثابت */
+    var themeChoice: Int
+        get() = p.getInt("themeChoice", ThemeManager.AUTO)
+        set(v) { p.edit().putInt("themeChoice", v).apply() }
+
+    /** -1 = لون تلقائي متناسق مع الخلفية، وإلا رقم في ThemeManager.TEXT_COLORS */
+    var textColorChoice: Int
+        get() = p.getInt("textColorChoice", -1)
+        set(v) { p.edit().putInt("textColorChoice", v).apply() }
 }
 
-/** الثيمات الستة */
+/** ثيم = خلفية متدرجة + لون نص + لون مميز */
 class Theme(
     val arabicName: String,
-    val bg: Int,
-    val card: Int,
+    val bgTop: Int,
+    val bgBottom: Int,
     val text: Int,
-    val sub: Int,
-    val accent: Int
-)
+    val accent: Int,
+    val dark: Boolean
+) {
+    val bg: Int get() = bgTop
+    val sub: Int get() = ThemeManager.alpha(text, 0xB8)
+    val card: Int get() = if (dark) Color.argb(0x26, 255, 255, 255) else Color.argb(0x1C, 0, 0, 0)
+
+    fun gradient(): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(bgTop, bgBottom))
+
+    fun withText(c: Int) = Theme(arabicName, bgTop, bgBottom, c, accent, dark)
+}
 
 object ThemeManager {
+    const val AUTO = -1
+    const val SYSTEM = -2
+
+    /** 0 الفجر، 1 الشروق، 2 الظهر، 3 العصر، 4 المغرب، 5 العشاء، 6 أبيض، 7 أسود */
     val themes = listOf(
         Theme(
-            "منتصف الليل",
-            Color.parseColor("#0B1B33"), Color.parseColor("#14284A"),
-            Color.parseColor("#F6EEDC"), Color.parseColor("#C9B47E"), Color.parseColor("#E8CC82")
+            "الفجر",
+            Color.parseColor("#0B1233"), Color.parseColor("#3B3478"),
+            Color.parseColor("#EFE8FF"), Color.parseColor("#F4A8C4"), true
         ),
         Theme(
-            "زمردي",
-            Color.parseColor("#06231C"), Color.parseColor("#0E3A2E"),
-            Color.parseColor("#EFF8F2"), Color.parseColor("#9FC9B5"), Color.parseColor("#5FD6A0")
+            "الشروق",
+            Color.parseColor("#FFC98A"), Color.parseColor("#FFE9C7"),
+            Color.parseColor("#4A2A0E"), Color.parseColor("#C4501B"), false
         ),
         Theme(
-            "بنفسجي",
-            Color.parseColor("#1A1030"), Color.parseColor("#2A1B4D"),
-            Color.parseColor("#F3EEFB"), Color.parseColor("#BBA8E0"), Color.parseColor("#B794F6")
+            "الظهر",
+            Color.parseColor("#5BB4F0"), Color.parseColor("#CBEBFF"),
+            Color.parseColor("#0B2A4A"), Color.parseColor("#0A5BB5"), false
         ),
         Theme(
-            "جرافيت",
-            Color.parseColor("#16181B"), Color.parseColor("#25282D"),
-            Color.parseColor("#ECECEC"), Color.parseColor("#A5A9AF"), Color.parseColor("#D9DDE3")
+            "العصر",
+            Color.parseColor("#E3A02F"), Color.parseColor("#F8D78A"),
+            Color.parseColor("#3A2208"), Color.parseColor("#7A3E00"), false
         ),
         Theme(
-            "برونزي",
-            Color.parseColor("#231810"), Color.parseColor("#3A2A1C"),
-            Color.parseColor("#F7EBDD"), Color.parseColor("#CDAE8A"), Color.parseColor("#D9A066")
+            "المغرب",
+            Color.parseColor("#3A1C57"), Color.parseColor("#C94E2D"),
+            Color.parseColor("#FFF2E3"), Color.parseColor("#FFD27A"), true
         ),
         Theme(
-            "خمري",
-            Color.parseColor("#2A0D14"), Color.parseColor("#431621"),
-            Color.parseColor("#F8ECEE"), Color.parseColor("#D1A1AB"), Color.parseColor("#E26A80")
+            "العشاء",
+            Color.parseColor("#050A18"), Color.parseColor("#16264A"),
+            Color.parseColor("#F1E7CF"), Color.parseColor("#E8CC82"), true
+        ),
+        Theme(
+            "أبيض",
+            Color.parseColor("#FFFFFF"), Color.parseColor("#F1F3F6"),
+            Color.parseColor("#14181F"), Color.parseColor("#1F6FEB"), false
+        ),
+        Theme(
+            "أسود",
+            Color.parseColor("#000000"), Color.parseColor("#0B0B0D"),
+            Color.parseColor("#F2F2F2"), Color.parseColor("#E8CC82"), true
         )
     )
 
-    fun get(index: Int): Theme = themes[index.coerceIn(0, themes.size - 1)]
+    /** ألوان الخط الاختيارية */
+    val TEXT_COLORS = intArrayOf(
+        Color.parseColor("#FFFFFF"),
+        Color.parseColor("#F6EEDC"),
+        Color.parseColor("#E8CC82"),
+        Color.parseColor("#14181F"),
+        Color.parseColor("#3A2208"),
+        Color.parseColor("#0B2A4A")
+    )
+
+    fun alpha(c: Int, a: Int): Int = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
+
+    private fun lum(c: Int): Double {
+        fun f(v: Int): Double {
+            val s = v / 255.0
+            return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * f(Color.red(c)) + 0.7152 * f(Color.green(c)) + 0.0722 * f(Color.blue(c))
+    }
+
+    private fun contrast(a: Int, b: Int): Double {
+        val l1 = Math.max(lum(a), lum(b))
+        val l2 = Math.min(lum(a), lum(b))
+        return (l1 + 0.05) / (l2 + 0.05)
+    }
+
+    /** الثيم الذي يناسب الوقت الحالي: يبدأ قبل كل صلاة بربع ساعة */
+    private fun autoIndex(store: Store): Int {
+        if (store.hasLocation) {
+            val now = ZonedDateTime.now(PrayerManager.zone(store))
+            val r = PrayerManager.compute(store, now)
+            if (r != null) {
+                var idx = 5
+                for (i in 0..5) {
+                    if (!now.isBefore(r.times[i].minusMinutes(15))) idx = i
+                }
+                return idx
+            }
+        }
+        val h = LocalDateTime.now().hour
+        return when {
+            h < 4 -> 5
+            h < 6 -> 0
+            h < 12 -> 1
+            h < 15 -> 2
+            h < 18 -> 3
+            h < 20 -> 4
+            else -> 5
+        }
+    }
+
+    private fun isNight(ctx: Context): Boolean =
+        (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /** يحدد الثيم الفعلي مع لون الخط (الاختياري إن كان واضحًا، وإلا اللون المتناسق) */
+    fun resolve(ctx: Context, settings: SettingsRepository, store: Store): Theme {
+        val choice = settings.themeChoice
+        val base = when {
+            choice == AUTO -> themes[autoIndex(store)]
+            choice == SYSTEM -> if (isNight(ctx)) themes[7] else themes[6]
+            else -> themes[choice.coerceIn(0, themes.size - 1)]
+        }
+        val tc = settings.textColorChoice
+        if (tc in TEXT_COLORS.indices) {
+            val c = TEXT_COLORS[tc]
+            if (Math.min(contrast(c, base.bgTop), contrast(c, base.bgBottom)) >= 3.0) {
+                return base.withText(c)
+            }
+        }
+        return base
+    }
+
+    /** ألوان شريطي الحالة والتنقل وأيقوناتهما حسب الثيم */
+    @Suppress("DEPRECATION")
+    fun applySystemBars(a: Activity, th: Theme) {
+        val w = a.window
+        w.statusBarColor = th.bgTop
+        w.navigationBarColor = th.bgBottom
+        val lightBars = !th.dark
+        if (Build.VERSION.SDK_INT >= 30) {
+            val flags = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            w.insetsController?.setSystemBarsAppearance(if (lightBars) flags else 0, flags)
+        } else {
+            var f = w.decorView.systemUiVisibility
+            val mask = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            f = if (lightBars) f or mask else f and mask.inv()
+            w.decorView.systemUiVisibility = f
+        }
+    }
 }
 
 /** الساعة والتاريخان وأسماء الأيام */

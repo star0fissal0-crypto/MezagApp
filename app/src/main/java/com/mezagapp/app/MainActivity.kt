@@ -59,19 +59,31 @@ class MainActivity : Activity() {
     @Volatile
     private var fetching = false
 
+    private val font: Typeface by lazy {
+        try {
+            Typeface.createFromAsset(assets, "font.otf")
+        } catch (e: Exception) {
+            try {
+                Typeface.createFromAsset(assets, "font.ttf")
+            } catch (e2: Exception) {
+                Typeface.DEFAULT
+            }
+        }
+    }
+
+    /** يعيد الرسم عند بداية كل دقيقة تقريبًا */
     private val tick = object : Runnable {
         override fun run() {
             render()
-            handler.postDelayed(this, 30_000)
+            handler.postDelayed(this, 60_000L - System.currentTimeMillis() % 60_000L + 300L)
         }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun box(color: Int, stroke: Int = 0): GradientDrawable = GradientDrawable().apply {
+    private fun roundBox(color: Int, radius: Int = 20): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(14).toFloat()
-        if (stroke != 0) setStroke(dp(2), stroke)
+        cornerRadius = dp(radius).toFloat()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,9 +91,13 @@ class MainActivity : Activity() {
         col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(dp(14), dp(24), dp(14), dp(32))
+            setPadding(dp(18), dp(16), dp(18), dp(36))
         }
-        scroll = ScrollView(this).apply { addView(col) }
+        scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            fitsSystemWindows = true
+            addView(col)
+        }
         setContentView(scroll)
         render()
     }
@@ -145,9 +161,13 @@ class MainActivity : Activity() {
     private fun render() {
         val settings = SettingsRepository(this)
         val store = Store(this)
-        val th = ThemeManager.get(settings.themeIndex)
+        val th = ThemeManager.resolve(this, settings, store)
         val arabic = WidgetPrefs.arabicDigits(this)
         val use24 = settings.use24h
+
+        scroll.background = th.gradient()
+        ThemeManager.applySystemBars(this, th)
+        col.removeAllViews()
 
         fun n(s: String): String {
             if (!arabic) return s
@@ -156,47 +176,58 @@ class MainActivity : Activity() {
             return sb.toString()
         }
 
-        fun tv(s: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        fun tv(
+            s: String, size: Float, color: Int,
+            bold: Boolean = false, useFont: Boolean = true
+        ): TextView = TextView(this).apply {
             text = s
             textSize = size
             setTextColor(color)
             gravity = Gravity.CENTER
-            if (bold) typeface = Typeface.DEFAULT_BOLD
+            includeFontPadding = false
+            typeface = when {
+                !useFont -> Typeface.DEFAULT
+                bold -> Typeface.create(font, Typeface.BOLD)
+                else -> font
+            }
         }
 
-        fun add(v: View, top: Int = 12) {
-            col.addView(
-                v,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(top) }
-            )
+        fun add(v: View, top: Int = 12, center: Boolean = false) {
+            val lp = LinearLayout.LayoutParams(
+                if (center) ViewGroup.LayoutParams.WRAP_CONTENT else ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(top)
+                if (center) gravity = Gravity.CENTER_HORIZONTAL
+            }
+            col.addView(v, lp)
         }
 
-        fun tap(s: String, onClick: () -> Unit) = tv(s, 17f, th.accent).apply {
-            background = box(th.card)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setOnClickListener { onClick() }
+        fun cardBox(): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundBox(th.card, 24)
+            setPadding(dp(10), dp(14), dp(10), dp(14))
         }
 
-        fun hRow() = LinearLayout(this).apply {
+        fun hRow(): LinearLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
-        fun vBox(stroke: Int = 0, hPad: Int = 4) = LinearLayout(this).apply {
+        fun cell(): LinearLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            background = box(th.card, stroke)
-            setPadding(dp(hPad), dp(10), dp(hPad), dp(10))
         }
 
-        fun cellLp(m: Int = 3) = LinearLayout.LayoutParams(
-            0, ViewGroup.LayoutParams.MATCH_PARENT, 1f
+        fun gap(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(h)) }
+
+        fun weightLp(m: Int = 2) = LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
         ).apply { setMargins(dp(m), 0, dp(m), 0) }
 
-        scroll.setBackgroundColor(th.bg)
-        col.removeAllViews()
+        fun vLine() = View(this).apply {
+            setBackgroundColor(ThemeManager.alpha(th.text, 0x2E))
+        }
 
         val zone = PrayerManager.zone(store)
         val zNow = ZonedDateTime.now(zone)
@@ -207,112 +238,152 @@ class MainActivity : Activity() {
         // ===== الرأس: المدينة + الإعدادات =====
         val header = hRow()
         header.addView(
-            tv(if (store.hasLocation) "📍 ${store.place}" else "📍 اختر المدينة", 17f, th.accent).apply {
+            tv(
+                if (store.hasLocation) "📍 ${store.place}" else "📍 اختر المدينة",
+                15f, th.sub, false, false
+            ).apply {
                 gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                setOnClickListener { startActivity(Intent(this@MainActivity, LocationActivity::class.java)) }
+                setPadding(0, dp(8), 0, dp(8))
+                setOnClickListener {
+                    startActivity(Intent(this@MainActivity, LocationActivity::class.java))
+                }
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         header.addView(
-            tv("⚙️ الإعدادات", 17f, th.accent).apply {
-                background = box(th.card)
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+            tv("⚙️", 20f, th.text, false, false).apply {
+                background = roundBox(th.card, 20)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                setOnClickListener {
+                    startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                }
             }
         )
         add(header, 0)
 
         // ===== الساعة والتاريخ =====
-        val cp = ClockManager.parts(local, use24)
-        add(tv(n("${cp.hour}:${cp.minute}"), 76f, th.accent, true), 8)
-        if (cp.period.isNotEmpty()) add(tv(cp.period, 20f, th.sub), 0)
         val date = local.toLocalDate()
-        add(tv(ClockManager.dayName(date), 30f, th.text, true), 4)
-        add(tv(n(ClockManager.gregorian(date, settings.levantMonths)), 18f, th.sub), 2)
-        add(tv(n(ClockManager.hijri(date, settings.hijriAdjust)), 18f, th.sub), 2)
+        add(tv(ClockManager.dayName(date), 22f, th.accent, true), 18)
+        val cp = ClockManager.parts(local, use24)
+        add(tv(n("${cp.hour}:${cp.minute}"), 88f, th.text, true), 2)
+        if (cp.period.isNotEmpty()) add(tv(cp.period, 20f, th.sub), 0)
+        add(
+            tv(
+                n(ClockManager.gregorian(date, settings.levantMonths)) + "   ·   " +
+                    n(ClockManager.hijri(date, settings.hijriAdjust)),
+                14f, th.sub
+            ), 6
+        )
+
+        // ===== العد التنازلي للصلاة القادمة =====
+        if (r != null) {
+            add(
+                tv(n(PrayerManager.text(r.state)), 16f, th.accent, true).apply {
+                    background = roundBox(ThemeManager.alpha(th.accent, 0x2A), 26)
+                    setPadding(dp(18), dp(10), dp(18), dp(10))
+                }, 22, true
+            )
+        }
 
         // ===== مواقيت الصلاة =====
         if (!store.hasLocation) {
-            add(tap("اختر مدينتك لعرض المواقيت والطقس") {
-                startActivity(Intent(this, LocationActivity::class.java))
-            }, 20)
-        } else if (r == null) {
-            add(tv("جارٍ جلب المواقيت...", 16f, th.sub), 20)
-        } else {
             add(
-                tv(n(PrayerManager.text(r.state)), 18f, th.accent, true).apply {
-                    background = box(th.card)
-                    setPadding(dp(12), dp(12), dp(12), dp(12))
-                }, 20
+                tv("اختر مدينتك لعرض المواقيت والطقس", 17f, th.accent, true).apply {
+                    background = roundBox(th.card, 24)
+                    setPadding(dp(16), dp(20), dp(16), dp(20))
+                    setOnClickListener {
+                        startActivity(Intent(this@MainActivity, LocationActivity::class.java))
+                    }
+                }, 28
             )
-            for (line in 0..1) {
-                val row = hRow()
-                for (k in 0..2) {
-                    val i = line * 3 + k
-                    val t = r.times[i]
-                    val (tm, per) = hm(use24, t.hour, t.minute)
-                    val isNext = i == r.nextIndex
-                    val c = vBox(if (isNext) th.accent else 0)
-                    c.addView(tv(PrayerManager.displayName(i, today), 14f, th.sub))
-                    c.addView(tv(n(tm), 22f, if (isNext) th.accent else th.text, true))
-                    c.addView(tv(per, 12f, th.sub))
-                    row.addView(c, cellLp())
+        } else if (r == null) {
+            add(tv("جارٍ جلب المواقيت...", 15f, th.sub), 28)
+        } else {
+            val pc = cardBox()
+            val prow = hRow()
+            for (i in 0..5) {
+                val t = r.times[i]
+                val (tm, per) = hm(use24, t.hour, t.minute)
+                val isNext = i == r.nextIndex
+                val c = cell().apply {
+                    setPadding(dp(2), dp(10), dp(2), dp(10))
+                    if (isNext) background = roundBox(ThemeManager.alpha(th.accent, 0x38), 14)
                 }
-                add(row, 8)
+                c.addView(
+                    tv(PrayerManager.displayName(i, today), 12f, if (isNext) th.accent else th.sub)
+                )
+                c.addView(gap(6))
+                c.addView(tv(n(tm), 17f, if (isNext) th.accent else th.text, true))
+                if (per.isNotEmpty()) c.addView(tv(per, 11f, th.sub))
+                prow.addView(c, weightLp())
             }
+            pc.addView(prow)
+            add(pc, 26)
         }
 
         // ===== الطقس =====
         val days = if (store.hasLocation) WeatherManager.days(store, today) else emptyList()
         if (store.hasLocation) {
             if (days.isEmpty()) {
-                add(tv("جارٍ جلب الطقس...", 16f, th.sub), 20)
+                add(tv("جارٍ جلب الطقس...", 15f, th.sub), 16)
             } else {
-                add(tv("الأيام القادمة", 14f, th.sub), 20)
-                val row = hRow()
-                for (d in days) {
+                val wc = cardBox()
+                val drow = hRow()
+                for ((k, d) in days.withIndex()) {
+                    if (k > 0) {
+                        drow.addView(
+                            vLine(),
+                            LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT)
+                                .apply { setMargins(0, dp(6), 0, dp(6)) }
+                        )
+                    }
                     val name = when (d.date) {
                         today -> "اليوم"
                         today.plusDays(1) -> "غدًا"
                         today.plusDays(2) -> "بعد غد"
                         else -> ClockManager.dayName(d.date)
                     }
-                    val c = vBox(0, 4)
-                    c.addView(tv(name, 16f, th.text, true))
-                    c.addView(
-                        tv(
-                            n(ClockManager.gregorian(d.date, settings.levantMonths).substringBeforeLast(' ')),
-                            12f, th.sub
-                        )
-                    )
-                    c.addView(tv(WeatherManager.cond(d.code).icon, 34f, th.text))
-                    c.addView(tv(n("${d.max}°"), 22f, th.accent, true))
-                    row.addView(c, cellLp())
+                    val c = cell()
+                    c.addView(tv(name, 13f, th.sub))
+                    c.addView(gap(4))
+                    c.addView(tv(WeatherManager.cond(d.code).icon, 32f, th.text, false, false))
+                    c.addView(gap(4))
+                    c.addView(tv(n("${d.max}°"), 22f, th.text, true))
+                    drow.addView(c, weightLp(4))
                 }
-                add(row, 6)
-            }
+                wc.addView(drow)
 
-            val slots = fixedSlots(store, zNow.toLocalDateTime())
-            if (slots.isNotEmpty()) {
-                add(tv("خلال اليوم", 14f, th.sub), 16)
-                val row = hRow()
-                for (s in slots) {
-                    val label = if (use24) {
-                        n(String.format(Locale.US, "%02d:00", s.time.hour))
-                    } else {
-                        val h12 = if (s.time.hour % 12 == 0) 12 else s.time.hour % 12
-                        n("$h12") + " " + (if (s.time.hour < 12) "ص" else "م")
-                    }
-                    val c = vBox(0, 2)
-                    c.addView(tv(label, 12f, th.sub))
-                    c.addView(
-                        tv(if (s.time.toLocalDate() != today) "غدًا" else " ", 10f, th.sub)
+                val slots = fixedSlots(store, zNow.toLocalDateTime())
+                if (slots.isNotEmpty()) {
+                    wc.addView(
+                        View(this).apply {
+                            setBackgroundColor(ThemeManager.alpha(th.text, 0x2E))
+                        },
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
+                            .apply { setMargins(dp(8), dp(14), dp(8), dp(14)) }
                     )
-                    c.addView(tv(WeatherManager.cond(s.code).icon, 22f, th.text))
-                    c.addView(tv(n("${s.temp}°"), 15f, th.text, true))
-                    row.addView(c, cellLp(2))
+                    val srow = hRow()
+                    for (s in slots) {
+                        val label = if (use24) {
+                            n(String.format(Locale.US, "%02d:00", s.time.hour))
+                        } else {
+                            val h12 = if (s.time.hour % 12 == 0) 12 else s.time.hour % 12
+                            n("$h12") + " " + (if (s.time.hour < 12) "ص" else "م")
+                        }
+                        val c = cell()
+                        c.addView(tv(label, 12f, th.sub))
+                        c.addView(
+                            tv(if (s.time.toLocalDate() != today) "غدًا" else " ", 10f, th.sub)
+                        )
+                        c.addView(gap(2))
+                        c.addView(tv(WeatherManager.cond(s.code).icon, 22f, th.text, false, false))
+                        c.addView(gap(2))
+                        c.addView(tv(n("${s.temp}°"), 15f, th.text, true))
+                        srow.addView(c, weightLp(1))
+                    }
+                    wc.addView(srow)
                 }
-                add(row, 6)
+                add(wc, 16)
             }
         }
 
@@ -320,7 +391,7 @@ class MainActivity : Activity() {
         val oldW = days.isNotEmpty() &&
             System.currentTimeMillis() - store.weatherFetched > 3L * 3600_000L
         if (store.hasLocation && (oldW || r?.stale == true)) {
-            add(tv("بعض البيانات قديمة، تحقق من الاتصال", 13f, th.sub), 16)
+            add(tv("بعض البيانات قديمة، تحقق من الاتصال", 12f, th.sub), 16)
         }
     }
 }

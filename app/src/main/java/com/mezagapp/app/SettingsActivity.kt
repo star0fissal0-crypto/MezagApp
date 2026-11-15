@@ -61,7 +61,8 @@ class SettingsActivity : Activity() {
         else "آخر تحديث: " + n(SimpleDateFormat("d/M HH:mm", Locale.US).format(Date(ms)))
 
     private fun render() {
-        val t = ThemeManager.get(settings.themeIndex)
+        val t = ThemeManager.resolve(this, settings, store)
+        ThemeManager.applySystemBars(this, t)
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -126,6 +127,83 @@ class SettingsActivity : Activity() {
 
         col.addView(label("الإعدادات", 30f, t.text))
 
+        // ===== الخلفية (الثيم) =====
+        col.addView(label("الخلفية", 18f, t.sub))
+        val choice = settings.themeChoice
+        col.addView(tap(
+            (if (choice == ThemeManager.AUTO) "✓  " else "") +
+                "🕌 تلقائي: تتبدل قبل كل صلاة بربع ساعة",
+            t.accent, t.card
+        ) {
+            settings.themeChoice = ThemeManager.AUTO
+            render()
+        }, rowLp())
+        col.addView(tap(
+            (if (choice == ThemeManager.SYSTEM) "✓  " else "") +
+                "📱 حسب وضع الهاتف (فاتح / داكن)",
+            t.accent, t.card
+        ) {
+            settings.themeChoice = ThemeManager.SYSTEM
+            render()
+        }, rowLp())
+        ThemeManager.themes.forEachIndexed { i, th ->
+            val sel = choice == i
+            col.addView(TextView(this).apply {
+                text = (if (sel) "✓  " else "") + th.arabicName
+                textSize = 18f
+                setTextColor(th.text)
+                background = th.gradient().apply {
+                    cornerRadius = dp(14).toFloat()
+                    if (sel) setStroke(dp(3), th.accent)
+                }
+                setPadding(dp(18), dp(14), dp(18), dp(14))
+                setOnClickListener {
+                    settings.themeChoice = i
+                    render()
+                }
+            }, rowLp())
+        }
+
+        // ===== لون الخط =====
+        col.addView(label("لون الخط", 18f, t.sub))
+        col.addView(tap(
+            (if (settings.textColorChoice < 0) "✓  " else "") +
+                "تلقائي: لون متناسق مع الخلفية",
+            t.accent, t.card
+        ) {
+            settings.textColorChoice = -1
+            render()
+        }, rowLp())
+        val swatches = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        ThemeManager.TEXT_COLORS.forEachIndexed { i, c ->
+            val sel = settings.textColorChoice == i
+            swatches.addView(View(this).apply {
+                background = GradientDrawable().apply {
+                    setColor(c)
+                    cornerRadius = dp(10).toFloat()
+                    setStroke(
+                        dp(if (sel) 3 else 1),
+                        if (sel) t.accent else ThemeManager.alpha(t.text, 0x66)
+                    )
+                }
+                setOnClickListener {
+                    settings.textColorChoice = i
+                    render()
+                }
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        col.addView(swatches, rowLp())
+        col.addView(TextView(this).apply {
+            text = "اللون الضعيف التباين مع الخلفية يُستبدل تلقائيًا لضمان وضوح النص."
+            textSize = 13f
+            setTextColor(t.sub)
+        })
+
+        // ===== الساعة والتاريخ والأرقام =====
+        col.addView(label("الساعة والتاريخ", 18f, t.sub))
         col.addView(switchRow(n("نظام 24 ساعة"), settings.use24h) { settings.use24h = it })
         col.addView(switchRow("أسماء الشهور المشرقية (كانون، شباط...)", settings.levantMonths) {
             settings.levantMonths = it
@@ -152,6 +230,7 @@ class SettingsActivity : Activity() {
             { settings.hijriAdjust = settings.hijriAdjust + 1; render() }
         ))
 
+        // ===== الموقع والمواقيت =====
         col.addView(label("الموقع", 18f, t.sub))
         col.addView(tap(
             if (store.hasLocation) "📍 ${store.place}" else "📍 اختر المدينة", t.accent, t.card
@@ -220,19 +299,9 @@ class SettingsActivity : Activity() {
             setTextColor(t.sub)
         })
 
-        col.addView(label("الثيم", 18f, t.sub))
-        ThemeManager.themes.forEachIndexed { i, th ->
-            val selected = i == settings.themeIndex
-            col.addView(tap(
-                if (selected) "✓  ${th.arabicName}" else th.arabicName, th.accent, th.card
-            ) {
-                settings.themeIndex = i
-                render()
-            }, rowLp())
-        }
-
         setContentView(ScrollView(this).apply {
-            setBackgroundColor(t.bg)
+            setBackgroundColor(t.bgTop)
+            fitsSystemWindows = true
             addView(col)
         })
     }
