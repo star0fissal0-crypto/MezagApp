@@ -15,8 +15,8 @@ object Http {
     /** يجب استدعاؤها من خيط خلفي فقط */
     fun get(url: String): String? = try {
         val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 15_000
-        c.readTimeout = 20_000
+        c.connectTimeout = 8_000
+        c.readTimeout = 10_000
         c.requestMethod = "GET"
         if (c.responseCode != 200) {
             c.disconnect()
@@ -73,6 +73,10 @@ object PrayerManager {
 
     /** يجلب الشهر الحالي والقادم ويحفظهما سطرًا لكل يوم: yyyy-MM-dd ثم 6 أوقات */
     fun fetch(store: Store) {
+        synchronized(this) { fetchLocked(store) }
+    }
+
+    private fun fetchLocked(store: Store) {
         val zone = zone(store)
         val today = LocalDate.now(zone)
         val sb = StringBuilder()
@@ -197,6 +201,10 @@ object WeatherManager {
     }
 
     fun fetch(store: Store) {
+        synchronized(this) { fetchLocked(store) }
+    }
+
+    private fun fetchLocked(store: Store) {
         val url = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=${store.lat}&longitude=${store.lon}" +
             "&hourly=temperature_2m,weather_code" +

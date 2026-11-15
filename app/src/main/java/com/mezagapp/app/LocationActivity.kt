@@ -10,6 +10,8 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
@@ -31,6 +33,11 @@ class LocationActivity : Activity() {
     private lateinit var results: LinearLayout
     private lateinit var status: TextView
     private lateinit var input: EditText
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var gpsListener: LocationListener? = null
+    private var gotFix = false
+    private var saved = false
 
     private class Place(
         val title: String,
@@ -60,13 +67,16 @@ class LocationActivity : Activity() {
     }
 
     private fun hideKeyboard() {
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.hideSoftInputFromWindow(input.windowToken, 0)
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(input.windowToken, 0)
+        } catch (e: Exception) {
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // لا تُظهر لوحة المفاتيح تلقائيًا عند الفتح (سبب البطء)
+        // لا تُظهر لوحة المفاتيح تلقائيًا عند الفتح
         window.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
@@ -74,7 +84,6 @@ class LocationActivity : Activity() {
 
         store = Store(this)
         th = ThemeManager.resolve(this, SettingsRepository(this), store)
-        ThemeManager.applySystemBars(this, th)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -143,8 +152,16 @@ class LocationActivity : Activity() {
         )
 
         setContentView(root)
+        ThemeManager.applySystemBars(this, th)
         col.requestFocus()
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopGps()
+    }
+
+    // ===================== البحث اليدوي =====================
 
     private fun search(q: String) {
         hideKeyboard()
@@ -155,12 +172,14 @@ class LocationActivity : Activity() {
         status.text = "جارٍ البحث..."
         results.removeAllViews()
         Thread {
-            val body = Http.get(
-                "https://geocoding-api.open-meteo.com/v1/search?name=" +
-                    URLEncoder.encode(q, "UTF-8") + "&count=10&language=ar&format=json"
-            )
             val items = ArrayList<Place>()
+            var reached = false
             try {
+                val body = Http.get(
+                    "https://geocoding-api.open-meteo.com/v1/search?name=" +
+                        URLEncoder.encode(q, "UTF-8") + "&count=10&language=ar&format=json"
+                )
+                reached = body != null
                 val arr = if (body != null) JSONObject(body).optJSONArray("results") else null
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
@@ -179,10 +198,10 @@ class LocationActivity : Activity() {
                         )
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
             }
-            val reached = body != null
-            runOnUiThread { showResults(reached, items) }
+            val ok = reached
+            runOnUiThread { if (!isFinishing) showResults(ok, items) }
         }.start()
     }
 
@@ -202,22 +221,23 @@ class LocationActivity : Activity() {
         }
     }
 
+    /** يحفظ الموقع فقط ويغلق الشاشة. جلب المواقيت والطقس يتم في الشاشة الرئيسية */
     private fun save(lat: Double, lon: Double, name: String, cc: String, tz: String) {
+        if (saved) return
+        saved = true
+        stopGps()
         store.setLocation(lat, lon, name, cc, tz)
-        val app = applicationContext
-        Thread {
-            val s = Store(app)
-            PrayerManager.fetch(s)
-            WeatherManager.fetch(s)
-            WidgetUpdateManager.updateAll(app, false)
-        }.start()
         finish()
     }
 
+    // ===================== الموقع التلقائي =====================
+
+    private fun hasPerm(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+
     private fun useGps() {
         hideKeyboard()
-        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED
+        if (!hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION) &&
+            !hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)
         ) {
             requestPermissions(
                 arrayOf(
@@ -241,65 +261,106 @@ class LocationActivity : Activity() {
         }
     }
 
-    @Suppress("MissingPermission")
-    private fun locate() {
-        status.text = "جارٍ تحديد الموقع..."
-        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
-        var best: Location? = null
-        for (p in lm.getProviders(true)) {
-            val l = try {
-                lm.getLastKnownLocation(p)
-            } catch (e: Exception) {
-                null
+    private fun stopGps() {
+        handler.removeCallbacksAndMessages(null)
+        val l = gpsListener
+        gpsListener = null
+        if (l != null) {
+            try {
+                val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+                lm.removeUpdates(l)
+            } catch (e: Throwable) {
             }
-            if (l != null && (best == null || l.time > best.time)) best = l
         }
-        if (best != null) {
-            resolve(best)
-            return
-        }
-        val provider = when {
-            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            else -> null
-        }
-        if (provider == null) {
-            status.text = "فعّل خدمة الموقع في الهاتف"
-            return
-        }
-        @Suppress("DEPRECATION")
-        lm.requestSingleUpdate(provider, object : LocationListener {
-            override fun onLocationChanged(location: Location) {
-                resolve(location)
+    }
+
+    @Suppress("MissingPermission", "DEPRECATION")
+    private fun locate() {
+        gotFix = false
+        status.text = "جارٍ تحديد الموقع..."
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+
+            // آخر موقع معروف
+            var best: Location? = null
+            for (p in lm.getProviders(true)) {
+                val l = try {
+                    lm.getLastKnownLocation(p)
+                } catch (e: Throwable) {
+                    null
+                }
+                if (l != null && (best == null || l.time > best.time)) best = l
+            }
+            if (best != null) {
+                resolve(best)
+                return
             }
 
-            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-            override fun onProviderEnabled(provider: String) {}
-            override fun onProviderDisabled(provider: String) {}
-        }, mainLooper)
+            // لا يوجد موقع محفوظ: اطلب تحديثًا واحدًا بالمزوّد المناسب للإذن الممنوح
+            val fine = hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                fine && lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> null
+            }
+            if (provider == null) {
+                status.text = "فعّل خدمة الموقع في الهاتف (أو ابحث عن مدينتك يدويًا)"
+                return
+            }
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    resolve(location)
+                }
+
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+            gpsListener = listener
+            lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+
+            // مهلة 25 ثانية
+            handler.postDelayed({
+                if (!gotFix && !isFinishing) {
+                    stopGps()
+                    status.text = "تعذّر تحديد الموقع. ابحث عن مدينتك يدويًا"
+                }
+            }, 25_000L)
+        } catch (e: Throwable) {
+            status.text = "تعذّر تحديد الموقع. ابحث عن مدينتك يدويًا"
+        }
     }
 
     private fun resolve(loc: Location) {
+        if (gotFix) return
+        gotFix = true
+        stopGps()
+        status.text = "جارٍ تحديد اسم المدينة..."
         Thread {
             var name = "موقعي الحالي"
             var cc = ""
             try {
-                @Suppress("DEPRECATION")
-                val list = Geocoder(this, Locale("ar")).getFromLocation(loc.latitude, loc.longitude, 1)
-                val a = list?.firstOrNull()
-                if (a != null) {
-                    val n = listOfNotNull(
-                        a.locality ?: a.subAdminArea ?: a.adminArea, a.countryName
-                    ).distinct().joinToString("، ")
-                    if (n.isNotBlank()) name = n
-                    cc = a.countryCode ?: ""
+                if (Geocoder.isPresent()) {
+                    @Suppress("DEPRECATION")
+                    val list = Geocoder(this, Locale("ar"))
+                        .getFromLocation(loc.latitude, loc.longitude, 1)
+                    val a = list?.firstOrNull()
+                    if (a != null) {
+                        val n = listOfNotNull(
+                            a.locality ?: a.subAdminArea ?: a.adminArea, a.countryName
+                        ).distinct().joinToString("، ")
+                        if (n.isNotBlank()) name = n
+                        cc = a.countryCode ?: ""
+                    }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
             }
             val finalName = name
             val finalCc = cc
             runOnUiThread {
-                save(loc.latitude, loc.longitude, finalName, finalCc, ZoneId.systemDefault().id)
+                if (!isFinishing) {
+                    save(loc.latitude, loc.longitude, finalName, finalCc, ZoneId.systemDefault().id)
+                }
             }
         }.start()
     }

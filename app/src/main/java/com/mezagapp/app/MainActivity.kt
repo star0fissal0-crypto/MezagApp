@@ -1,6 +1,7 @@
 package com.mezagapp.app
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -14,10 +15,41 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONObject
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
 import java.util.Locale
 import kotlin.math.roundToInt
+
+/** يحفظ سبب أي توقف مفاجئ ليُعرض في المرة التالية */
+object CrashLog {
+    private var installed = false
+
+    fun install(ctx: Context) {
+        if (installed) return
+        installed = true
+        val app = ctx.applicationContext
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = StringWriter()
+                e.printStackTrace(PrintWriter(sw))
+                app.getSharedPreferences("mezag_crash", Context.MODE_PRIVATE)
+                    .edit().putString("last", "الخيط: ${t.name}\n" + sw.toString().take(2500)).commit()
+            } catch (x: Throwable) {
+            }
+            prev?.uncaughtException(t, e)
+        }
+    }
+
+    fun take(ctx: Context): String? {
+        val p = ctx.applicationContext.getSharedPreferences("mezag_crash", Context.MODE_PRIVATE)
+        val s = p.getString("last", null)
+        if (s != null) p.edit().remove("last").apply()
+        return s
+    }
+}
 
 private class FixedSlot(val time: LocalDateTime, val temp: Int, val code: Int)
 
@@ -59,6 +91,8 @@ class MainActivity : Activity() {
     @Volatile
     private var fetching = false
 
+    private var crashText: String? = null
+
     private val font: Typeface by lazy {
         try {
             Typeface.createFromAsset(assets, "font.otf")
@@ -88,6 +122,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
+        crashText = CrashLog.take(this)
         col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -143,7 +179,7 @@ class MainActivity : Activity() {
                     WidgetUpdateManager.updateAll(app, false)
                     runOnUiThread { if (!isFinishing) render() }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
             } finally {
                 fetching = false
             }
@@ -159,6 +195,26 @@ class MainActivity : Activity() {
         }
 
     private fun render() {
+        try {
+            renderInner()
+        } catch (e: Throwable) {
+            showError(e)
+        }
+    }
+
+    private fun showError(e: Throwable) {
+        scroll.setBackgroundColor(android.graphics.Color.BLACK)
+        col.removeAllViews()
+        col.addView(TextView(this).apply {
+            text = "حدث خطأ في عرض الشاشة. أرسل لي هذا النص:\n\n" + e.toString() + "\n" +
+                e.stackTrace.take(14).joinToString("\n")
+            textSize = 12f
+            setTextColor(android.graphics.Color.WHITE)
+            setTextIsSelectable(true)
+        })
+    }
+
+    private fun renderInner() {
         val settings = SettingsRepository(this)
         val store = Store(this)
         val th = ThemeManager.resolve(this, settings, store)
@@ -260,6 +316,31 @@ class MainActivity : Activity() {
             }
         )
         add(header, 0)
+
+        val ct = crashText
+        if (ct != null) {
+            add(tv("⚠️ توقف التطبيق في المرة السابقة. أرسل لي هذا النص:", 13f, th.accent, false, false), 12)
+            add(
+                TextView(this).apply {
+                    text = ct
+                    textSize = 10f
+                    setTextColor(th.text)
+                    setTextIsSelectable(true)
+                    typeface = Typeface.MONOSPACE
+                    background = roundBox(th.card, 12)
+                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                }, 6
+            )
+            add(
+                tv("إخفاء", 14f, th.accent, true, false).apply {
+                    setPadding(0, dp(8), 0, dp(8))
+                    setOnClickListener {
+                        crashText = null
+                        render()
+                    }
+                }, 4
+            )
+        }
 
         // ===== الساعة والتاريخ =====
         val date = local.toLocalDate()
