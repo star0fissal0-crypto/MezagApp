@@ -3,12 +3,14 @@ package com.mezagapp.app
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 object Http {
@@ -272,5 +274,47 @@ object WeatherManager {
         } catch (e: Exception) {
         }
         return out
+    }
+}
+
+/** أسماء المدن بلغة التطبيق (العربية) حسب لفظ اللغة، مثل Istanbul ← إسطنبول */
+object PlaceNames {
+    const val LANG = "ar"
+
+    fun hasArabic(s: String): Boolean = s.any { it in '\u0600'..'\u06FF' }
+
+    /** يجلب الاسم العربي لأقرب مدينة بهذا الاسم للإحداثيات. يعيد null إن تعذّر. من خيط خلفي فقط */
+    fun toArabic(name: String, lat: Double, lon: Double): String? = try {
+        val q = name.substringBefore('،').substringBefore(',').trim()
+        if (q.length < 2) {
+            null
+        } else {
+            val body = Http.get(
+                "https://geocoding-api.open-meteo.com/v1/search?name=" +
+                    URLEncoder.encode(q, "UTF-8") + "&count=10&language=" + LANG + "&format=json"
+            )
+            val arr = if (body != null) JSONObject(body).optJSONArray("results") else null
+            var best: JSONObject? = null
+            var bestD = Double.MAX_VALUE
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val dist = hypot(lat - o.getDouble("latitude"), lon - o.getDouble("longitude"))
+                    if (dist < bestD) {
+                        bestD = dist
+                        best = o
+                    }
+                }
+            }
+            val b = best
+            if (b != null && bestD < 1.0) {
+                listOf(b.optString("name"), b.optString("admin1"), b.optString("country"))
+                    .filter { it.isNotEmpty() }.distinct().joinToString("، ")
+            } else {
+                null
+            }
+        }
+    } catch (e: Throwable) {
+        null
     }
 }

@@ -283,7 +283,7 @@ object ThemeManager {
                 return idx
             }
         }
-        val h = LocalDateTime.now().hour
+        val h = ZonedDateTime.now(PrayerManager.zone(store)).hour
         return when {
             h < 4 -> 5
             h < 6 -> 0

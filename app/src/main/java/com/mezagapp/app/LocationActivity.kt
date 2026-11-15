@@ -343,7 +343,7 @@ class LocationActivity : Activity() {
             try {
                 if (Geocoder.isPresent()) {
                     @Suppress("DEPRECATION")
-                    val list = Geocoder(this, Locale("ar"))
+                    val list = Geocoder(this, Locale(PlaceNames.LANG))
                         .getFromLocation(loc.latitude, loc.longitude, 1)
                     val a = list?.firstOrNull()
                     if (a != null) {
@@ -355,6 +355,9 @@ class LocationActivity : Activity() {
                     }
                 }
             } catch (e: Throwable) {
+            }
+            if (name != "موقعي الحالي" && !PlaceNames.hasArabic(name)) {
+                PlaceNames.toArabic(name, loc.latitude, loc.longitude)?.let { name = it }
             }
             val finalName = name
             val finalCc = cc

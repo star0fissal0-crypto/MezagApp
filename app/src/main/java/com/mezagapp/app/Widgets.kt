@@ -282,9 +282,9 @@ object WidgetRenderer {
 
         c.scale(S, S)
 
-        val local = LocalDateTime.now()
-        val date = local.toLocalDate()
         val now = ZonedDateTime.now(PrayerManager.zone(store))
+        val local = now.toLocalDateTime()
+        val date = local.toLocalDate()
         val today = now.toLocalDate()
 
         // ===== الساعة =====

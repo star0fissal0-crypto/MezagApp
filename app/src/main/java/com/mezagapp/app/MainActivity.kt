@@ -289,7 +289,7 @@ class MainActivity : Activity() {
         val zone = PrayerManager.zone(store)
         val zNow = ZonedDateTime.now(zone)
         val today = zNow.toLocalDate()
-        val local = LocalDateTime.now()
+        val local = zNow.toLocalDateTime()
         val r = if (store.hasLocation) PrayerManager.compute(store, zNow) else null
 
         // ===== الرأس: المدينة + الإعدادات =====
