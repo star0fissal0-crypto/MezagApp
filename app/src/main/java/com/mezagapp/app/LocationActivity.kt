@@ -154,6 +154,7 @@ class LocationActivity : Activity() {
         setContentView(root)
         ThemeManager.applySystemBars(this, th)
         col.requestFocus()
+        if (intent.getStringExtra("mode") == "auto") handler.post { useGps() }
     }
 
     override fun onDestroy() {

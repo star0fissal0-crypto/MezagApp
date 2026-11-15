@@ -7,17 +7,30 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.format.DateFormat
 import android.view.View
 import android.view.WindowInsetsController
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
 import java.time.chrono.HijrahDate
 import java.time.temporal.ChronoField
 import java.util.Locale
+
+/** موقع محفوظ في سجل المواقع القديمة */
+class SavedPlace(
+    val lat: Double,
+    val lon: Double,
+    val place: String,
+    val country: String,
+    val tz: String
+)
 
 /** التخزين المحلي: الموقع، مواقيت الصلاة، الطقس، تعديل الدقائق */
 class Store(ctx: Context) {
@@ -34,7 +47,37 @@ class Store(ctx: Context) {
     val tz: String get() = str("tz")
     val hasLocation: Boolean get() = str("lat").isNotEmpty() && str("lon").isNotEmpty()
 
+    fun history(): List<SavedPlace> = try {
+        val a = JSONArray(str("locHistory").ifEmpty { "[]" })
+        (0 until a.length()).map {
+            val o = a.getJSONObject(it)
+            SavedPlace(
+                o.getDouble("lat"), o.getDouble("lon"),
+                o.getString("place"), o.optString("country"), o.optString("tz")
+            )
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun pushHistory(lat: Double, lon: Double, place: String, country: String, tz: String) {
+        if (place.isBlank()) return
+        val rest = history().filterNot {
+            it.place == place && Math.abs(it.lat - lat) < 0.01 && Math.abs(it.lon - lon) < 0.01
+        }
+        val all = (listOf(SavedPlace(lat, lon, place, country, tz)) + rest).take(8)
+        val a = JSONArray()
+        for (s in all) {
+            a.put(
+                JSONObject().put("lat", s.lat).put("lon", s.lon)
+                    .put("place", s.place).put("country", s.country).put("tz", s.tz)
+            )
+        }
+        p.edit().putString("locHistory", a.toString()).apply()
+    }
+
     fun setLocation(lat: Double, lon: Double, place: String, country: String, tz: String) {
+        pushHistory(lat, lon, place, country, tz)
         p.edit()
             .putString("lat", lat.toString())
             .putString("lon", lon.toString())
@@ -105,6 +148,19 @@ class SettingsRepository(private val ctx: Context) {
     var levantMonths: Boolean
         get() = p.getBoolean("levantMonths", true)
         set(v) { p.edit().putBoolean("levantMonths", v).apply() }
+
+    /** false = التاريخ الهجري تلقائي، true = يدوي بتعديل الأيام */
+    var hijriManual: Boolean
+        get() = p.getBoolean("hijriManual", p.getInt("hijriAdjust", 0) != 0)
+        set(v) { p.edit().putBoolean("hijriManual", v).apply() }
+
+    /** الأذان: تفعيل عام وتفعيل لكل صلاة (الإعدادات فقط، الصوت يضاف لاحقًا) */
+    var adhanEnabled: Boolean
+        get() = p.getBoolean("adhanEnabled", false)
+        set(v) { p.edit().putBoolean("adhanEnabled", v).apply() }
+
+    fun adhanOn(i: Int): Boolean = p.getBoolean("adhan$i", true)
+    fun setAdhan(i: Int, v: Boolean) { p.edit().putBoolean("adhan$i", v).apply() }
 
     var hijriAdjust: Int
         get() = p.getInt("hijriAdjust", 0)
@@ -249,19 +305,57 @@ object ThemeManager {
         (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt()
     )
 
+    /** طبقة تعتيم خفيفة فوق الصورة (للداكنة) أو تفتيح (للفاتحة) لتحسين وضوح النص */
+    fun scrimFor(c: Int): Int =
+        if (lum(c) < 0.35) Color.argb(90, 0, 0, 0) else Color.argb(60, 255, 255, 255)
+
+    private fun withScrim(c: Int): Int {
+        val s = scrimFor(c)
+        return mix(c, Color.rgb(Color.red(s), Color.green(s), Color.blue(s)), Color.alpha(s) / 255f)
+    }
+
+    /** يقرّب اللون من الأبيض أو الأسود حتى يتباين بوضوح مع الخلفية */
+    private fun ensureContrast(c: Int, bg: Int, min: Double, towardWhite: Boolean): Int {
+        var x = c
+        var k = 0
+        while (contrast(x, bg) < min && k < 12) {
+            x = mix(x, if (towardWhite) Color.WHITE else Color.BLACK, 0.2f)
+            k++
+        }
+        return x
+    }
+
     /** ثيم لون واحد مستوحى من متوسط لون الخلفية */
     fun fromBackground(ctx: Context, i: Int): Theme {
         val idx = i.coerceIn(0, 5)
-        val c = Backgrounds.color(ctx, idx) ?: return themes[idx]
+        val raw = Backgrounds.color(ctx, idx) ?: return themes[idx]
+        val c = withScrim(raw)
         val dark = lum(c) < 0.35
-        val text = Color.parseColor(if (dark) "#F4F0E8" else "#14181F")
-        val accent = if (dark) mix(c, Color.WHITE, 0.7f) else mix(c, Color.BLACK, 0.6f)
+        val text = ensureContrast(
+            Color.parseColor(if (dark) "#F4F0E8" else "#14181F"), c, 7.0, dark
+        )
+        val accent = ensureContrast(themes[idx].accent, c, 4.5, dark)
         return Theme(themes[idx].arabicName, c, c, text, accent, dark)
+    }
+
+    /** رقم الخلفية المعروضة في الرئيسية، أو null للثيم الأبيض/الأسود */
+    fun backgroundIndex(settings: SettingsRepository, store: Store): Int? {
+        val ch = settings.themeChoice
+        return when {
+            ch in 0..5 -> ch
+            ch == 6 || ch == 7 -> null
+            else -> autoIndex(store)
+        }
     }
 
     /** يحدد الثيم الفعلي مع لون الخط (الاختياري إن كان واضحًا، وإلا اللون المتناسق) */
     fun resolve(ctx: Context, settings: SettingsRepository, store: Store): Theme {
-        val base = fromBackground(ctx, autoIndex(store))
+        val ch = settings.themeChoice
+        val base = when {
+            ch in 0..5 -> fromBackground(ctx, ch)
+            ch == 6 || ch == 7 -> themes[ch]
+            else -> fromBackground(ctx, autoIndex(store))
+        }
         val tc = settings.textColorChoice
         if (tc in TEXT_COLORS.indices) {
             val c = TEXT_COLORS[tc]
@@ -389,8 +483,16 @@ object Backgrounds {
         return b
     }
 
-    fun drawable(ctx: Context, i: Int): BitmapDrawable? =
-        bitmap(ctx, i)?.let { BitmapDrawable(ctx.resources, it) }
+    fun drawable(ctx: Context, i: Int): android.graphics.drawable.Drawable? {
+        val b = bitmap(ctx, i) ?: return null
+        val avgColor = color(ctx, i) ?: return BitmapDrawable(ctx.resources, b)
+        return LayerDrawable(
+            arrayOf(
+                BitmapDrawable(ctx.resources, b),
+                ColorDrawable(ThemeManager.scrimFor(avgColor))
+            )
+        )
+    }
 
     fun color(ctx: Context, i: Int): Int? = avg[i] ?: run { bitmap(ctx, i); avg[i] }
 }
