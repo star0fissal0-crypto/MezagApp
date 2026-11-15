@@ -127,43 +127,6 @@ class SettingsActivity : Activity() {
 
         col.addView(label("الإعدادات", 30f, t.text))
 
-        // ===== الخلفية (الثيم) =====
-        col.addView(label("الخلفية", 18f, t.sub))
-        val choice = settings.themeChoice
-        col.addView(tap(
-            (if (choice == ThemeManager.AUTO) "✓  " else "") +
-                "🕌 تلقائي: تتبدل قبل كل صلاة بربع ساعة",
-            t.accent, t.card
-        ) {
-            settings.themeChoice = ThemeManager.AUTO
-            render()
-        }, rowLp())
-        col.addView(tap(
-            (if (choice == ThemeManager.SYSTEM) "✓  " else "") +
-                "📱 حسب وضع الهاتف (فاتح / داكن)",
-            t.accent, t.card
-        ) {
-            settings.themeChoice = ThemeManager.SYSTEM
-            render()
-        }, rowLp())
-        ThemeManager.themes.forEachIndexed { i, th ->
-            val sel = choice == i
-            col.addView(TextView(this).apply {
-                text = (if (sel) "✓  " else "") + th.arabicName
-                textSize = 18f
-                setTextColor(th.text)
-                background = th.gradient().apply {
-                    cornerRadius = dp(14).toFloat()
-                    if (sel) setStroke(dp(3), th.accent)
-                }
-                setPadding(dp(18), dp(14), dp(18), dp(14))
-                setOnClickListener {
-                    settings.themeChoice = i
-                    render()
-                }
-            }, rowLp())
-        }
-
         // ===== لون الخط =====
         col.addView(label("لون الخط", 18f, t.sub))
         col.addView(tap(

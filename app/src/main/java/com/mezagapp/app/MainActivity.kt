@@ -221,7 +221,7 @@ class MainActivity : Activity() {
         val arabic = WidgetPrefs.arabicDigits(this)
         val use24 = settings.use24h
 
-        scroll.background = th.gradient()
+        scroll.background = Backgrounds.drawable(this, ThemeManager.autoIndex(store)) ?: th.gradient()
         ThemeManager.applySystemBars(this, th)
         col.removeAllViews()
 

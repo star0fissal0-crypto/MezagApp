@@ -3,7 +3,10 @@ package com.mezagapp.app
 import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.format.DateFormat
@@ -212,7 +215,7 @@ object ThemeManager {
     }
 
     /** الثيم الذي يناسب الوقت الحالي: يبدأ قبل كل صلاة بربع ساعة */
-    private fun autoIndex(store: Store): Int {
+    fun autoIndex(store: Store): Int {
         if (store.hasLocation) {
             val now = ZonedDateTime.now(PrayerManager.zone(store))
             val r = PrayerManager.compute(store, now)
@@ -240,14 +243,25 @@ object ThemeManager {
         (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
 
+    private fun mix(a: Int, b: Int, t: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt()
+    )
+
+    /** ثيم لون واحد مستوحى من متوسط لون الخلفية */
+    fun fromBackground(ctx: Context, i: Int): Theme {
+        val idx = i.coerceIn(0, 5)
+        val c = Backgrounds.color(ctx, idx) ?: return themes[idx]
+        val dark = lum(c) < 0.35
+        val text = Color.parseColor(if (dark) "#F4F0E8" else "#14181F")
+        val accent = if (dark) mix(c, Color.WHITE, 0.7f) else mix(c, Color.BLACK, 0.6f)
+        return Theme(themes[idx].arabicName, c, c, text, accent, dark)
+    }
+
     /** يحدد الثيم الفعلي مع لون الخط (الاختياري إن كان واضحًا، وإلا اللون المتناسق) */
     fun resolve(ctx: Context, settings: SettingsRepository, store: Store): Theme {
-        val choice = settings.themeChoice
-        val base = when {
-            choice == AUTO -> themes[autoIndex(store)]
-            choice == SYSTEM -> if (isNight(ctx)) themes[7] else themes[6]
-            else -> themes[choice.coerceIn(0, themes.size - 1)]
-        }
+        val base = fromBackground(ctx, autoIndex(store))
         val tc = settings.textColorChoice
         if (tc in TEXT_COLORS.indices) {
             val c = TEXT_COLORS[tc]
@@ -322,4 +336,61 @@ object ClockManager {
         val y = h.get(ChronoField.YEAR)
         return "$d ${HIJRI_MONTHS[m - 1]} $y هـ"
     }
+}
+
+/** خلفيات الواجهة الرئيسية: assets/bg0.jpg … bg5.jpg */
+object Backgrounds {
+    private var cachedIndex = -1
+    private var cachedBmp: Bitmap? = null
+    private val avg = HashMap<Int, Int>()
+
+    private fun cropToScreen(ctx: Context, b: Bitmap): Bitmap {
+        val m = ctx.resources.displayMetrics
+        val target = m.widthPixels.toFloat() / m.heightPixels
+        val cur = b.width.toFloat() / b.height
+        return if (cur > target) {
+            val w = (b.height * target).toInt()
+            Bitmap.createBitmap(b, (b.width - w) / 2, 0, w, b.height)
+        } else {
+            val h = (b.width / target).toInt()
+            Bitmap.createBitmap(b, 0, (b.height - h) / 2, b.width, h)
+        }
+    }
+
+    private fun decode(ctx: Context, i: Int): Bitmap? = try {
+        val name = "bg$i.jpg"
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        ctx.assets.open(name).use { BitmapFactory.decodeStream(it, null, o) }
+        var s = 1
+        while (maxOf(o.outWidth, o.outHeight) / s > 1800) s *= 2
+        val o2 = BitmapFactory.Options().apply { inSampleSize = s }
+        val src = ctx.assets.open(name).use { BitmapFactory.decodeStream(it, null, o2) }
+        src?.let { cropToScreen(ctx, it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun bitmap(ctx: Context, i: Int): Bitmap? {
+        if (i == cachedIndex && cachedBmp != null) return cachedBmp
+        val b = decode(ctx, i) ?: return null
+        cachedIndex = i
+        cachedBmp = b
+        val s = Bitmap.createScaledBitmap(b, 24, 24, true)
+        var r = 0L
+        var g = 0L
+        var bl = 0L
+        for (y in 0 until 24) for (x in 0 until 24) {
+            val p = s.getPixel(x, y)
+            r += Color.red(p)
+            g += Color.green(p)
+            bl += Color.blue(p)
+        }
+        avg[i] = Color.rgb((r / 576).toInt(), (g / 576).toInt(), (bl / 576).toInt())
+        return b
+    }
+
+    fun drawable(ctx: Context, i: Int): BitmapDrawable? =
+        bitmap(ctx, i)?.let { BitmapDrawable(ctx.resources, it) }
+
+    fun color(ctx: Context, i: Int): Int? = avg[i] ?: run { bitmap(ctx, i); avg[i] }
 }
